@@ -6,54 +6,89 @@ import RegionCards from "@/components/RegionCards"
 import WindyMap from "@/components/WindyMap"
 import SourceStatus from "@/components/SourceStatus"
 import RetryButton from "@/components/RetryButton"
-import type { WeatherResponse, SummaryResponse } from "@/lib/types"
+import { fetchAllWeather } from "@/lib/fetch-weather"
+import type { SummaryResponse, WeatherResponse } from "@/lib/types"
+import Anthropic from "@anthropic-ai/sdk"
 
-async function getWeather(): Promise<WeatherResponse | null> {
-  try {
-    const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
-    const res = await fetch(`${base}/api/weather`, {
-      next: { revalidate: 21600, tags: ["weather"] },
-    })
-    if (!res.ok) return null
-    return res.json()
-  } catch {
-    return null
-  }
-}
+export const revalidate = 21600
 
-async function getSummary(): Promise<SummaryResponse | null> {
-  try {
-    const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
-    const res = await fetch(`${base}/api/summary`, {
-      next: { revalidate: 86400, tags: ["summary"] },
+async function getSummary(weatherData: WeatherResponse): Promise<SummaryResponse | null> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  if (!anthropicKey) return null
+
+  const uradRegions = weatherData.regions.filter((r) => r.region.uradBelt)
+  const regionSummaries = uradRegions
+    .map((r) => {
+      const total16 = r.days.reduce((s, d) => s + d.precipMm, 0).toFixed(1)
+      const next3 = r.days.slice(0, 3).map((d) => `${d.date}: ${d.precipMm.toFixed(1)}mm`).join(", ")
+      const firstRainDay = r.days.find((d) => d.precipMm >= 2)
+      const rainArrival = firstRainDay ? firstRainDay.date : "none in 16 days"
+      return `${r.region.name} (${r.region.state}): 16-day total=${total16}mm, rain arrives=${rainArrival}, next 3 days=[${next3}]`
     })
-    if (!res.ok) return null
-    return res.json()
+    .join("\n")
+
+  const prompt = `Here is the 16-day daily rainfall forecast for the urad dal growing districts:\n\n${regionSummaries}\n\nToday's date: ${new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}`
+
+  try {
+    const client = new Anthropic({ apiKey: anthropicKey })
+    const message = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 400,
+      system: `You are a weather intelligence analyst for an urad dal trader in Chennai, India.
+The trader sources urad dal from: Gulbarga and Bidar (Karnataka), Latur, Nanded, Marathwada and Vidarbha (Maharashtra).
+You are given 16-day daily rainfall forecasts for all these districts.
+Reply in exactly 4 lines, each starting with its label and a colon:
+Status: [which districts have monsoon rain today and which are still dry]
+Outlook: [name each urad belt district — how many mm total over 16 days, when rain arrives]
+Risk: [biggest weather risk or opportunity for urad procurement in next 10 days]
+Signal: [BUY NOW or WAIT AND WATCH or HOLD POSITION — one specific reason why]
+Use district names. Use mm figures. No generic language. Sharp and direct.`,
+      messages: [{ role: "user", content: prompt }],
+    })
+
+    const text = (message.content[0] as { type: string; text: string }).text
+    const lines: Record<string, string> = {}
+    for (const line of text.split("\n")) {
+      const match = line.match(/^(Status|Outlook|Risk|Signal):\s*(.+)/)
+      if (match) lines[match[1].toLowerCase()] = match[2].trim()
+    }
+
+    return {
+      status: lines.status ?? "",
+      outlook: lines.outlook ?? "",
+      risk: lines.risk ?? "",
+      signal: lines.signal ?? "",
+      generatedAt: new Date().toISOString(),
+      nextRefreshAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }
   } catch {
-    return null
+    return { error: true, fallback: "AI analysis unavailable — check rainfall data below" }
   }
 }
 
 export default async function Home() {
-  const [weather, summary] = await Promise.all([getWeather(), getSummary()])
+  let weather: WeatherResponse | null = null
+  try {
+    weather = await fetchAllWeather()
+  } catch {
+    weather = null
+  }
 
-  const hasWeather = weather && weather.regions.length > 0
-  const isOffline = !hasWeather
+  const hasWeather = weather && weather.regions.length > 0 && weather.sources.openmeteo === "ok"
+
+  const summary = hasWeather ? await getSummary(weather!) : null
 
   return (
     <main className="min-h-screen bg-[#F8FAFC]">
       <Header fetchedAt={weather?.fetchedAt ?? null} />
 
-      {isOffline && (
+      {!hasWeather && (
         <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-center text-sm text-red-700">
           Weather data unavailable. You may be offline — check your connection and refresh.
         </div>
       )}
 
-      <StatusBadge
-        regions={hasWeather ? weather.regions : []}
-        loading={false}
-      />
+      <StatusBadge regions={hasWeather ? weather!.regions : []} loading={false} />
 
       <div className="max-w-[1280px] mx-auto px-4 py-6 space-y-8">
         <AISummary summary={summary} loading={false} />
@@ -61,14 +96,13 @@ export default async function Home() {
         {hasWeather ? (
           <>
             <RainfallHeatmap
-              regions={weather.regions}
-              fetchedAt={weather.fetchedAt}
+              regions={weather!.regions}
+              fetchedAt={weather!.fetchedAt}
               loading={false}
             />
-
             <RegionCards
-              regions={weather.regions}
-              fetchedAt={weather.fetchedAt}
+              regions={weather!.regions}
+              fetchedAt={weather!.fetchedAt}
               loading={false}
             />
           </>

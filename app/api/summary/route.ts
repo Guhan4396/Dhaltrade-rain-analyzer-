@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import Anthropic from "@anthropic-ai/sdk"
-import type { WeatherResponse, SummaryResponse } from "@/lib/types"
+import { fetchAllWeather } from "@/lib/fetch-weather"
+import type { SummaryResponse } from "@/lib/types"
 
 export const revalidate = 86400
 
@@ -13,14 +14,9 @@ export async function GET() {
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) return NextResponse.json(FALLBACK)
 
-  let weatherData: WeatherResponse
+  let weatherData
   try {
-    const weatherRes = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/weather`,
-      { next: { tags: ["summary"], revalidate: 86400 } }
-    )
-    if (!weatherRes.ok) throw new Error("weather fetch failed")
-    weatherData = await weatherRes.json()
+    weatherData = await fetchAllWeather()
   } catch {
     return NextResponse.json(FALLBACK)
   }
@@ -69,15 +65,14 @@ Use district names. Use mm figures. No generic language. Sharp and direct.`,
     const generatedAt = new Date().toISOString()
     const nextRefreshAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
 
-    const response: SummaryResponse = {
+    return NextResponse.json({
       status: lines.status ?? "",
       outlook: lines.outlook ?? "",
       risk: lines.risk ?? "",
       signal: lines.signal ?? "",
       generatedAt,
       nextRefreshAt,
-    }
-    return NextResponse.json(response)
+    } as SummaryResponse)
   } catch {
     return NextResponse.json(FALLBACK)
   }
