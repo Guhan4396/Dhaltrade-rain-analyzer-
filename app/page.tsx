@@ -5,6 +5,7 @@ import RainfallHeatmap from "@/components/RainfallHeatmap"
 import RegionCards from "@/components/RegionCards"
 import WindyMap from "@/components/WindyMap"
 import SourceStatus from "@/components/SourceStatus"
+import RetryButton from "@/components/RetryButton"
 import type { WeatherResponse, SummaryResponse } from "@/lib/types"
 
 async function getWeather(): Promise<WeatherResponse | null> {
@@ -77,12 +78,7 @@ export default async function Home() {
             <p className="text-red-500 text-sm mb-4">
               Open-Meteo could not be reached. Check your connection.
             </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
-            >
-              Retry
-            </button>
+            <RetryButton />
           </div>
         )}
 
